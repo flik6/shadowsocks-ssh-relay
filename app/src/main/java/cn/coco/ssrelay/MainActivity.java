@@ -127,7 +127,7 @@ public final class MainActivity extends Activity {
         Config c=Config.load(this);
         section("转发路径","从远程入口到手机网络出口",28);
         LinearLayout route=card();
-        routeLine(route,"远程入口",c.host.isEmpty()?"尚未配置":c.host+":"+c.remotePort,BLUE);
+        routeLine(route,"远程入口",c.host.isEmpty()?"尚未配置":formatHostPort(c.host,c.remotePort),BLUE);
         add(route,text("↓  SSH 加密隧道",13,TEAL,true),14);
         routeLine(route,"手机 SS",c.localBind+":"+c.localPort,TEAL);
         add(route,text(c.method+"  ·  TCP",13,MUTED,false),17); add(page,route,13);
@@ -161,7 +161,7 @@ public final class MainActivity extends Activity {
         Config c=Config.load(this);
         section("SSH 服务器","连接目标与远程映射",25);
         LinearLayout ssh=card();
-        sshEndpoint=field(ssh,"SSH 地址",c.host.isEmpty()?"":formatSshEndpoint(c.host,c.sshPort),
+        sshEndpoint=field(ssh,"SSH 地址",c.host.isEmpty()?"":formatHostPort(c.host,c.sshPort),
                 "域名或 IP:端口",InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_URI);
         note(ssh,"例如 pve.example.com:2200；只填域名时使用端口 22。",9);
         user=field(ssh,"SSH 用户名",c.user,"root",InputType.TYPE_CLASS_TEXT);
@@ -257,7 +257,7 @@ public final class MainActivity extends Activity {
         final String host; final int port;
         SshTarget(String host,int port) { this.host=host; this.port=port; }
     }
-    private String formatSshEndpoint(String host,int port) {
+    private String formatHostPort(String host,int port) {
         return (host.contains(":")&&!host.startsWith("[")?"["+host+"]":host)+":"+port;
     }
     private SshTarget parseSshEndpoint(String input) {
@@ -330,7 +330,7 @@ public final class MainActivity extends Activity {
         Config cfg=Config.load(this);
         if(cfg.password.isEmpty()||cfg.host.isEmpty()) { alert("请先在设置页填写 SSH 主机和 SS 密码"); return; }
         String token=Base64.getUrlEncoder().withoutPadding().encodeToString((cfg.method+":"+cfg.password).getBytes(StandardCharsets.UTF_8));
-        String uri="ss://"+token+"@"+cfg.host+":"+cfg.remotePort+"#ShadowsocksSSHRelay";
+        String uri="ss://"+token+"@"+formatHostPort(cfg.host,cfg.remotePort)+"#ShadowsocksSSHRelay";
         ((ClipboardManager)getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("Shadowsocks",uri));
         Toast.makeText(this,"连接链接已复制",Toast.LENGTH_SHORT).show();
     }
