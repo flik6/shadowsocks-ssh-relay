@@ -24,7 +24,7 @@ public final class MainActivity extends Activity {
     private final Handler handler=new Handler(Looper.getMainLooper());
     private LinearLayout page;
     private TextView statusText, stateLabel, actionButton, keyState, trustState;
-    private EditText host, sshPort, user, remotePort, localPort, bind, localBind, ssPassword;
+    private EditText sshEndpoint, user, remotePort, localPort, bind, localBind, ssPassword;
     private Spinner ssMethod;
     private boolean trustDialogOpen;
     private String shownChangedFingerprint="";
@@ -123,7 +123,7 @@ public final class MainActivity extends Activity {
         tcp.setBackground(shape(0xff183743,9)); row.addView(tcp); add(hero,row,0);
         add(hero,text("连接状态",13,MUTED,false),25);
         statusText=text("已停止",21,WHITE,true); statusText.setLineSpacing(dp(3),1); add(hero,statusText,7);
-        note(hero,"启动后保持前台通知，断线时自动重连。",13); add(page,hero,24);
+        note(hero,"SSH 断线后自动重试；DDNS 更新后会连接到新地址。",13); add(page,hero,24);
         Config c=Config.load(this);
         section("转发路径","从远程入口到手机网络出口",28);
         LinearLayout route=card();
@@ -161,28 +161,46 @@ public final class MainActivity extends Activity {
         Config c=Config.load(this);
         section("SSH 服务器","连接目标与远程映射",25);
         LinearLayout ssh=card();
-        host=field(ssh,"主机 / IP",c.host,"example.com",InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_URI);
-        sshPort=field(ssh,"SSH 端口",String.valueOf(c.sshPort),"22",InputType.TYPE_CLASS_NUMBER);
+        sshEndpoint=field(ssh,"SSH 地址",c.host.isEmpty()?"":formatSshEndpoint(c.host,c.sshPort),
+                "域名或 IP:端口",InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_URI);
+        note(ssh,"例如 pve.example.com:2200；只填域名时使用端口 22。",9);
         user=field(ssh,"SSH 用户名",c.user,"root",InputType.TYPE_CLASS_TEXT);
-        remotePort=field(ssh,"远程映射端口",String.valueOf(c.remotePort),"61000",InputType.TYPE_CLASS_NUMBER);
-        bind=field(ssh,"远程监听地址",c.bind,"0.0.0.0",InputType.TYPE_CLASS_TEXT);
-        note(ssh,"0.0.0.0 请求对外监听；服务器需允许 GatewayPorts。",14); add(page,ssh,13);
-        section("Shadowsocks","手机上的服务端配置",28);
+        LinearLayout ports=new LinearLayout(this); ports.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout remoteColumn=new LinearLayout(this); remoteColumn.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout localColumn=new LinearLayout(this); localColumn.setOrientation(LinearLayout.VERTICAL);
+        remotePort=field(remoteColumn,"远程端口",String.valueOf(c.remotePort),"61000",InputType.TYPE_CLASS_NUMBER);
+        localPort=field(localColumn,"手机 SS 端口",String.valueOf(c.localPort),"8388",InputType.TYPE_CLASS_NUMBER);
+        ports.addView(remoteColumn,new LinearLayout.LayoutParams(0,-2,1));
+        LinearLayout.LayoutParams localParams=new LinearLayout.LayoutParams(0,-2,1);
+        localParams.leftMargin=dp(12); ports.addView(localColumn,localParams); add(ssh,ports,0);
+        LinearLayout advanced=new LinearLayout(this); advanced.setOrientation(LinearLayout.VERTICAL);
+        bind=field(advanced,"远程监听地址",c.bind,"0.0.0.0",InputType.TYPE_CLASS_TEXT);
+        localBind=field(advanced,"手机监听地址",c.localBind,"127.0.0.1",InputType.TYPE_CLASS_TEXT);
+        note(advanced,"远程公网监听需要服务器开启 GatewayPorts。",12);
+        boolean expanded=!c.bind.equals("0.0.0.0")||!c.localBind.equals("127.0.0.1");
+        advanced.setVisibility(expanded?View.VISIBLE:View.GONE);
+        TextView advancedToggle=text(expanded?"高级选项  ▴":"高级选项  ▾",14,TEAL,true);
+        advancedToggle.setPadding(0,dp(16),0,dp(6));
+        advancedToggle.setOnClickListener(v->{
+            boolean show=advanced.getVisibility()!=View.VISIBLE;
+            advanced.setVisibility(show?View.VISIBLE:View.GONE);
+            advancedToggle.setText(show?"高级选项  ▴":"高级选项  ▾");
+        });
+        add(ssh,advancedToggle,0); add(ssh,advanced,0); add(page,ssh,13);
+        section("Shadowsocks","加密方式与连接密码",28);
         LinearLayout ss=card();
-        localPort=field(ss,"本地 SS 端口",String.valueOf(c.localPort),"8388",InputType.TYPE_CLASS_NUMBER);
-        localBind=field(ss,"本地监听地址",c.localBind,"127.0.0.1",InputType.TYPE_CLASS_TEXT);
         add(ss,text("加密方式",13,MUTED,true),17);
         ssMethod=new Spinner(this);
         ArrayAdapter<String> adapter=new ArrayAdapter<>(this,android.R.layout.simple_spinner_item,new String[]{"aes-256-gcm","aes-128-gcm"});
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         ssMethod.setAdapter(adapter); ssMethod.setSelection(c.method.equals("aes-128-gcm")?1:0);
         ssMethod.setBackground(outline(BG,LINE,12)); ssMethod.setPadding(dp(12),dp(5),dp(8),dp(5)); add(ss,ssMethod,7);
-        ssPassword=field(ss,"SS 密码",c.password,"输入或生成强密码",InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+        ssPassword=field(ss,"SS 密码",c.password,"输入或生成强密码",InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD);
         add(ss,action("生成随机密码",false,()->{
             byte[] random=new byte[32]; new SecureRandom().nextBytes(random);
             ssPassword.setText(Base64.getUrlEncoder().withoutPadding().encodeToString(random));
         }),12);
-        note(ss,"本地默认只监听 127.0.0.1，由 SSH 隧道访问。",15); add(page,ss,13);
+        note(ss,"手机 SS 默认只监听 127.0.0.1，由 SSH 隧道访问。",15); add(page,ss,13);
         section("SSH 身份与信任","手机只需保存一把 SSH 私钥",28);
         LinearLayout security=card();
         keyState=text("",14,WHITE,true); add(security,keyState,0); updateKeyState();
@@ -220,7 +238,8 @@ public final class MainActivity extends Activity {
     }
     private void saveSettings() {
         try {
-            Config updated=new Config(host.getText().toString().trim(),parsePort(sshPort),user.getText().toString().trim(),
+            SshTarget target=parseSshEndpoint(sshEndpoint.getText().toString());
+            Config updated=new Config(target.host,target.port,user.getText().toString().trim(),
                 parsePort(remotePort),parsePort(localPort),bind.getText().toString().trim(),
                 localBind.getText().toString().trim(),ssMethod.getSelectedItem().toString(),ssPassword.getText().toString());
             if(!updated.bind.equals("0.0.0.0")&&!updated.bind.equals("127.0.0.1")) throw new IllegalArgumentException("远程监听地址只支持 0.0.0.0 或 127.0.0.1");
@@ -233,6 +252,42 @@ public final class MainActivity extends Activity {
         int port=Integer.parseInt(field.getText().toString().trim());
         if(port<1||port>65535) throw new IllegalArgumentException("端口需在 1–65535 之间");
         return port;
+    }
+    private static final class SshTarget {
+        final String host; final int port;
+        SshTarget(String host,int port) { this.host=host; this.port=port; }
+    }
+    private String formatSshEndpoint(String host,int port) {
+        return (host.contains(":")&&!host.startsWith("[")?"["+host+"]":host)+":"+port;
+    }
+    private SshTarget parseSshEndpoint(String input) {
+        String value=input.trim();
+        if(value.isEmpty()) return new SshTarget("",22);
+        String name; String portText=null;
+        if(value.startsWith("[")) {
+            int end=value.indexOf(']');
+            if(end<2) throw new IllegalArgumentException("IPv6 地址请写成 [地址]:端口");
+            name=value.substring(1,end);
+            if(end+1<value.length()) {
+                if(value.charAt(end+1)!=':') throw new IllegalArgumentException("SSH 地址格式应为 [地址]:端口");
+                portText=value.substring(end+2);
+            }
+        } else {
+            int colon=value.lastIndexOf(':');
+            if(colon>=0) {
+                if(value.indexOf(':')!=colon) throw new IllegalArgumentException("IPv6 地址请写成 [地址]:端口");
+                name=value.substring(0,colon);
+                portText=value.substring(colon+1);
+            } else name=value;
+        }
+        if(name.trim().isEmpty()) throw new IllegalArgumentException("请填写 SSH 域名或 IP");
+        int port=22;
+        if(portText!=null) {
+            try { port=Integer.parseInt(portText); }
+            catch(NumberFormatException e) { throw new IllegalArgumentException("SSH 端口格式无效"); }
+            if(port<1||port>65535) throw new IllegalArgumentException("SSH 端口需在 1–65535 之间");
+        }
+        return new SshTarget(name.trim(),port);
     }
     private void updateStatus() {
         if(statusText==null) return;

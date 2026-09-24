@@ -71,6 +71,7 @@ public final class RelayService extends Service {
                     retry=0;
                     status("SSH 转发已建立；远端实际监听地址请在服务器核对（端口 "+cfg.remotePort+"）");
                     while(running && s.isConnected()) Thread.sleep(2000);
+                    if(running) status("SSH 已断开，正在等待重连");
                 } catch(Exception e) {
                     if(running) {
                         HostTrust trust=new HostTrust(this,cfg.host,cfg.sshPort);
@@ -83,9 +84,12 @@ public final class RelayService extends Service {
                     if(s!=null) s.disconnect();
                     if(keyBytes!=null) Arrays.fill(keyBytes,(byte)0);
                 }
-                if(running) Thread.sleep(Math.min(60000,5000L*(1L<<Math.min(4,retry++))));
+                if(running) {
+                    try { Thread.sleep(Math.min(60000,5000L*(1L<<Math.min(4,retry++)))); }
+                    catch(InterruptedException ignored) { }
+                }
             }
-        } catch(Exception e) { status("启动失败："+e.getMessage()); }
+        } catch(Exception e) { if(running) status("启动失败："+e.getMessage()); }
         finally {
             running=false;
             getSharedPreferences("status",MODE_PRIVATE).edit().putBoolean("running",false).apply();
