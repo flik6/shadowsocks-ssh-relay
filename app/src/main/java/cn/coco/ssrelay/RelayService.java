@@ -5,8 +5,6 @@ import android.content.*;
 import android.os.*;
 import com.jcraft.jsch.*;
 import java.io.File;
-import java.security.MessageDigest;
-import java.util.Base64;
 
 public final class RelayService extends Service {
     static final String START="cn.coco.ssrelay.START", STOP="cn.coco.ssrelay.STOP";
@@ -17,6 +15,7 @@ public final class RelayService extends Service {
     private Thread thread;
 
     static String status(Context c) { return c.getSharedPreferences("status",MODE_PRIVATE).getString("message","已停止"); }
+    static boolean isRunning(Context c) { return c.getSharedPreferences("status",MODE_PRIVATE).getBoolean("running",false); }
     private void status(String message) {
         getSharedPreferences("status",MODE_PRIVATE).edit().putString("message",message).apply();
         NotificationManager nm=getSystemService(NotificationManager.class);
@@ -31,6 +30,7 @@ public final class RelayService extends Service {
         if(intent!=null && STOP.equals(intent.getAction())) { stopRelay(); stopSelf(); return START_NOT_STICKY; }
         if(!running) {
             running=true;
+            getSharedPreferences("status",MODE_PRIVATE).edit().putBoolean("running",true).apply();
             startForeground(1,notification("正在启动"));
             thread=new Thread(this::runRelay,"ss-relay"); thread.start();
         }
@@ -41,7 +41,7 @@ public final class RelayService extends Service {
         PendingIntent content=PendingIntent.getActivity(this,0,open,PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT);
         Intent stop=new Intent(this,RelayService.class).setAction(STOP);
         PendingIntent stopAction=PendingIntent.getService(this,1,stop,PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT);
-        return new Notification.Builder(this,CHANNEL).setSmallIcon(android.R.drawable.stat_sys_upload)
+        return new Notification.Builder(this,CHANNEL).setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle("Shadowsocks SSH Relay").setContentText(message).setContentIntent(content)
                 .addAction(android.R.drawable.ic_media_pause,"停止",stopAction).setOngoing(true).build();
     }
@@ -49,7 +49,7 @@ public final class RelayService extends Service {
         try {
             Config cfg=Config.load(this); cfg.validate();
             File key=new File(getFilesDir(),"ssh_private_key");
-            if(!key.isFile()) throw new IllegalArgumentException("请先在“密钥”页导入 SSH 私钥");
+            if(!key.isFile()) throw new IllegalArgumentException("请先在设置页导入 SSH 私钥");
             server=new ShadowsocksServer(cfg.localBind,cfg.localPort,cfg.method,cfg.password);
             int retry=0;
             while(running) {
@@ -57,7 +57,8 @@ public final class RelayService extends Service {
                     status("本地 SS 已启动，正在连接 SSH…");
                     JSch jsch=new JSch();
                     jsch.addIdentity(key.getAbsolutePath());
-                    jsch.setHostKeyRepository(new PinnedHostKey(cfg.fingerprint));
+                    HostTrust trust=new HostTrust(this,cfg.host,cfg.sshPort);
+                    jsch.setHostKeyRepository(trust);
                     Session s=jsch.getSession(cfg.user,cfg.host,cfg.sshPort);
                     session=s;
                     s.setConfig("StrictHostKeyChecking","yes");
@@ -69,7 +70,12 @@ public final class RelayService extends Service {
                     status("SSH 转发已建立；远端实际监听地址请在服务器核对（端口 "+cfg.remotePort+"）");
                     while(running && s.isConnected()) Thread.sleep(2000);
                 } catch(Exception e) {
-                    if(running) status("连接失败："+e.getMessage()+"；稍后重试");
+                    if(running) {
+                        HostTrust trust=new HostTrust(this,cfg.host,cfg.sshPort);
+                        if(!trust.pending().isEmpty())
+                            status(trust.changed()?"SSH 主机密钥已变化，请核对服务器":"等待确认 SSH 服务器指纹");
+                        else status("连接失败："+e.getMessage()+"；稍后重试");
+                    }
                 } finally {
                     Session s=session; session=null;
                     if(s!=null) s.disconnect();
@@ -79,12 +85,14 @@ public final class RelayService extends Service {
         } catch(Exception e) { status("启动失败："+e.getMessage()); }
         finally {
             running=false;
+            getSharedPreferences("status",MODE_PRIVATE).edit().putBoolean("running",false).apply();
             ShadowsocksServer s=server; server=null; if(s!=null) s.close();
             stopForeground(STOP_FOREGROUND_REMOVE); stopSelf();
         }
     }
     private void stopRelay() {
         running=false;
+        getSharedPreferences("status",MODE_PRIVATE).edit().putBoolean("running",false).apply();
         Session s=session; if(s!=null) s.disconnect();
         ShadowsocksServer ss=server; if(ss!=null) ss.close();
         if(thread!=null) thread.interrupt();
@@ -93,21 +101,4 @@ public final class RelayService extends Service {
     @Override public void onDestroy() { if(running) stopRelay(); super.onDestroy(); }
     @Override public IBinder onBind(Intent intent) { return null; }
 
-    private static final class PinnedHostKey implements HostKeyRepository {
-        private final String expected;
-        PinnedHostKey(String expected) { this.expected=expected.trim(); }
-        @Override public int check(String host,byte[] key) {
-            try {
-                byte[] digest=MessageDigest.getInstance("SHA-256").digest(key);
-                String actual="SHA256:"+Base64.getEncoder().withoutPadding().encodeToString(digest);
-                return expected.equals(actual)?OK:CHANGED;
-            } catch(Exception e) { return CHANGED; }
-        }
-        @Override public void add(HostKey hostkey,UserInfo ui) { }
-        @Override public void remove(String host,String type) { }
-        @Override public void remove(String host,String type,byte[] key) { }
-        @Override public String getKnownHostsRepositoryID() { return "Pinned SHA-256"; }
-        @Override public HostKey[] getHostKey() { return new HostKey[0]; }
-        @Override public HostKey[] getHostKey(String host,String type) { return new HostKey[0]; }
-    }
 }
