@@ -29,6 +29,8 @@ SSH 主机指纹默认留空，需从可信渠道核对后填写。更换目标�
 
 输出为 `app/build/outputs/apk/debug/app-debug.apk`。应用使用 [mwiede/JSch](https://github.com/mwiede/jsch) 建立 SSH 隧道，Shadowsocks TCP AEAD 服务端代码在 `ShadowsocksServer.java`。发布前应在实际安卓设备上执行端到端测试。
 
+推送到 `main` 后，GitHub Actions 的 **Build Android APK** 工作流会自动构建调试版 APK，并上传为 `shadowsocks-ssh-relay-debug-apk` 构建产物；也可在 Actions 页面手动运行。
+
 本次交付已检查 Java 语法与 AndroidManifest XML；由于当前工作机没有 JDK / Android SDK，尚未编译 APK，也尚未在安卓设备上验证运行。
 
 ## 限制
