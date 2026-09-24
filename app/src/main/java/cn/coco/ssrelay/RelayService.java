@@ -4,7 +4,7 @@ import android.app.*;
 import android.content.*;
 import android.os.*;
 import com.jcraft.jsch.*;
-import java.io.File;
+import java.util.Arrays;
 
 public final class RelayService extends Service {
     static final String START="cn.coco.ssrelay.START", STOP="cn.coco.ssrelay.STOP";
@@ -48,15 +48,17 @@ public final class RelayService extends Service {
     private void runRelay() {
         try {
             Config cfg=Config.load(this); cfg.validate();
-            File key=new File(getFilesDir(),"ssh_private_key");
-            if(!key.isFile()) throw new IllegalArgumentException("请先在设置页导入 SSH 私钥");
+            PrivateKeyStore.migrate(this);
+            if(!PrivateKeyStore.hasKey(this)) throw new IllegalArgumentException("请先在设置页导入或粘贴 SSH 私钥");
             server=new ShadowsocksServer(cfg.localBind,cfg.localPort,cfg.method,cfg.password);
             int retry=0;
             while(running) {
+                byte[] keyBytes=null;
                 try {
                     status("本地 SS 已启动，正在连接 SSH…");
                     JSch jsch=new JSch();
-                    jsch.addIdentity(key.getAbsolutePath());
+                    keyBytes=PrivateKeyStore.read(this);
+                    jsch.addIdentity("saved-ssh-key",keyBytes,null,null);
                     HostTrust trust=new HostTrust(this,cfg.host,cfg.sshPort);
                     jsch.setHostKeyRepository(trust);
                     Session s=jsch.getSession(cfg.user,cfg.host,cfg.sshPort);
@@ -79,6 +81,7 @@ public final class RelayService extends Service {
                 } finally {
                     Session s=session; session=null;
                     if(s!=null) s.disconnect();
+                    if(keyBytes!=null) Arrays.fill(keyBytes,(byte)0);
                 }
                 if(running) Thread.sleep(Math.min(60000,5000L*(1L<<Math.min(4,retry++))));
             }

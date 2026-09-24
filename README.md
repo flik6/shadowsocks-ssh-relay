@@ -7,7 +7,7 @@ Android 8.0+ 应用：在手机上运行 Shadowsocks TCP 服务端，再通过 S
 ## 使用
 
 1. 在远程服务器上，把一把 SSH 密钥的**公钥**加入登录用户的 `~/.ssh/authorized_keys`。
-2. 在应用“设置”页填写 SSH 主机、端口、用户名、远程映射端口、本地 SS 端口、监听地址、SS 加密方式和密码；只需向手机导入对应的**无口令私钥**。保存设置。
+2. 在应用“设置”页填写 SSH 主机、端口、用户名、远程映射端口、本地 SS 端口、监听地址、SS 加密方式和密码。手机上的**无口令私钥**可从文件导入，也可直接粘贴；私钥保存后只显示状态，不回显内容。
 3. 在“服务”页启动。首次连接时，应用显示服务器的 SSH 主机公钥 SHA256 指纹。请通过可信渠道核对后再确认。应用会记住该主机和端口的指纹；若以后发生变化，会拒绝连接。可在“设置”页清除旧信任，核对新指纹后重新确认。
 4. 在“服务”页复制 `ss://` 链接，导入另一台设备的 Shadowsocks 客户端。
 
@@ -25,4 +25,4 @@ Android 8.0+ 应用：在手机上运行 Shadowsocks TCP 服务端，再通过 S
 
 APK 位于 `app/build/outputs/apk/debug/app-debug.apk`。推送到 `main` 后，GitHub Actions 的 [Build Android APK](https://github.com/flik6/shadowsocks-ssh-relay/actions/workflows/android.yml) 会构建并上传 `shadowsocks-ssh-relay-debug-apk`。
 
-应用使用 [mwiede/JSch](https://github.com/mwiede/jsch) 建立 SSH 隧道。私钥保存在应用私有目录，SS 密码保存在应用私有 SharedPreferences 中。服务运行时保持前台通知并尝试断线重连。更改配置后需停止再启动服务。
+应用使用 [mwiede/JSch](https://github.com/mwiede/jsch) 建立 SSH 隧道。SSH 私钥由 Android Keystore 中的密钥以 AES-GCM 加密后保存在应用私有目录；连接时只在内存中解密，不写入明文临时文件。旧版应用的明文私钥会在升级后迁移为加密文件并删除旧文件。粘贴私钥不会自动清除系统剪贴板。SS 密码目前保存在应用私有 SharedPreferences 中。服务运行时保持前台通知并尝试断线重连。更改连接配置后需停止再启动服务。

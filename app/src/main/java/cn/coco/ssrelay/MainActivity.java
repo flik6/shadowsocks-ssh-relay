@@ -6,11 +6,14 @@ import android.content.*;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.text.InputType;
+import android.text.method.PasswordTransformationMethod;
 import android.view.*;
 import android.widget.*;
+import com.jcraft.jsch.JSch;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
+import java.util.Arrays;
 import java.util.Base64;
 
 public final class MainActivity extends Activity {
@@ -36,6 +39,8 @@ public final class MainActivity extends Activity {
         if(Build.VERSION.SDK_INT>=33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS")!=android.content.pm.PackageManager.PERMISSION_GRANTED)
             requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"},1);
         showTab(0);
+        try { PrivateKeyStore.migrate(this); }
+        catch(Exception e) { alert("旧版 SSH 私钥加密迁移失败，请重新导入或粘贴："+e.getMessage()); }
     }
     @Override protected void onResume() { super.onResume(); handler.removeCallbacks(refresh); handler.post(refresh); }
     @Override protected void onPause() { handler.removeCallbacks(refresh); super.onPause(); }
@@ -133,7 +138,7 @@ public final class MainActivity extends Activity {
             } else {
                 try {
                     Config.load(this).validate();
-                    if(!new File(getFilesDir(),"ssh_private_key").isFile()) throw new IllegalArgumentException("请先在设置页导入 SSH 私钥");
+                    if(!PrivateKeyStore.hasKey(this)) throw new IllegalArgumentException("请先在设置页导入或粘贴 SSH 私钥");
                     startForegroundService(new Intent(this,RelayService.class).setAction(RelayService.START));
                     handler.postDelayed(this::updateStatus,250);
                 } catch(Exception e) { alert(e.getMessage()); }
@@ -178,14 +183,15 @@ public final class MainActivity extends Activity {
             ssPassword.setText(Base64.getUrlEncoder().withoutPadding().encodeToString(random));
         }),12);
         note(ss,"本地默认只监听 127.0.0.1，由 SSH 隧道访问。",15); add(page,ss,13);
-        section("SSH 身份与信任","手机仅需导入 SSH 私钥",28);
+        section("SSH 身份与信任","手机只需保存一把 SSH 私钥",28);
         LinearLayout security=card();
         keyState=text("",14,WHITE,true); add(security,keyState,0); updateKeyState();
         add(security,action("导入 SSH 私钥",false,()->{
             Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT); i.setType("*/*");
             i.addCategory(Intent.CATEGORY_OPENABLE); startActivityForResult(i,PICK_KEY);
         }),13);
-        note(security,"对应的公钥需提前放在服务器的 authorized_keys 中；手机上不必导入公钥。暂支持无口令私钥。",13);
+        add(security,action("粘贴 SSH 私钥",false,this::showPasteKeyDialog),10);
+        note(security,"导入或粘贴后立即加密保存，不回显私钥内容。对应公钥需提前放在服务器的 authorized_keys 中；暂支持无口令私钥。",13);
         View divider=new View(this); divider.setBackgroundColor(LINE);
         LinearLayout.LayoutParams div=new LinearLayout.LayoutParams(-1,dp(1)); div.topMargin=dp(22); security.addView(divider,div);
         trustState=text("",14,WHITE,true); add(security,trustState,20); updateTrustState();
@@ -204,7 +210,7 @@ public final class MainActivity extends Activity {
         note(page,"修改配置后，请停止并重新启动服务。",12);
     }
     private void updateKeyState() {
-        if(keyState!=null) keyState.setText(new File(getFilesDir(),"ssh_private_key").isFile()?"●  已导入私钥":"○  尚未导入私钥");
+        if(keyState!=null) keyState.setText(PrivateKeyStore.hasEncryptedKey(this)?"●  SSH 私钥已加密保存":"○  尚未保存 SSH 私钥");
     }
     private void updateTrustState() {
         if(trustState==null) return;
@@ -273,18 +279,65 @@ public final class MainActivity extends Activity {
         ((ClipboardManager)getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("Shadowsocks",uri));
         Toast.makeText(this,"连接链接已复制",Toast.LENGTH_SHORT).show();
     }
+    private void showPasteKeyDialog() {
+        LinearLayout content=new LinearLayout(this); content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(20),dp(8),dp(20),0);
+        note(content,"粘贴无口令 SSH 私钥。输入内容会隐藏，保存后清空输入框。",0);
+        EditText input=new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE|
+                InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS|InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        input.setTransformationMethod(PasswordTransformationMethod.getInstance());
+        input.setHint("-----BEGIN OPENSSH PRIVATE KEY-----");
+        input.setHintTextColor(0xff71849d); input.setTextColor(WHITE);
+        input.setTextSize(14); input.setMinLines(5); input.setMaxLines(9);
+        input.setGravity(Gravity.TOP|Gravity.START);
+        input.setPadding(dp(12),dp(12),dp(12),dp(12));
+        input.setBackground(outline(BG,LINE,12)); add(content,input,13);
+        note(content,"粘贴来源的系统剪贴板不会由应用自动清除。",11);
+        AlertDialog dialog=new AlertDialog.Builder(this)
+                .setTitle("粘贴 SSH 私钥").setView(content)
+                .setNegativeButton("取消",null).setPositiveButton("加密保存",null).create();
+        dialog.setOnDismissListener(d->input.setText(""));
+        dialog.show();
+        dialog.getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
+            byte[] key=input.getText().toString().getBytes(StandardCharsets.UTF_8);
+            try {
+                savePrivateKey(key);
+                input.setText("");
+                Toast.makeText(this,"SSH 私钥已加密保存",Toast.LENGTH_SHORT).show();
+                dialog.dismiss();
+            } catch(Exception e) { alert("保存私钥失败："+e.getMessage()); }
+            finally { Arrays.fill(key,(byte)0); }
+        });
+    }
+    private void savePrivateKey(byte[] key) throws Exception {
+        if(key.length==0 || key.length>65536) throw new IllegalArgumentException("私钥大小需在 1–65536 字节之间");
+        byte[] candidate=key.clone();
+        try {
+            JSch verifier=new JSch();
+            verifier.addIdentity("candidate",candidate,null,null);
+            if(verifier.getIdentityRepository().getIdentities().isEmpty())
+                throw new IllegalArgumentException("未识别到 SSH 私钥");
+            if(verifier.getIdentityRepository().getIdentities().firstElement().isEncrypted())
+                throw new IllegalArgumentException("暂不支持带口令的 SSH 私钥");
+        } finally { Arrays.fill(candidate,(byte)0); }
+        PrivateKeyStore.save(this,key);
+        updateKeyState();
+    }
     private void alert(String message) { new AlertDialog.Builder(this).setMessage(message).setPositiveButton("知道了",null).show(); }
     @Override protected void onActivityResult(int requestCode,int resultCode,Intent data) {
         super.onActivityResult(requestCode,resultCode,data);
         if(requestCode!=PICK_KEY||resultCode!=RESULT_OK||data==null) return;
+        byte[] key=null;
         try(InputStream in=getContentResolver().openInputStream(data.getData())) {
             if(in==null) throw new IOException("无法读取文件");
             ByteArrayOutputStream bytes=new ByteArrayOutputStream(); byte[] buffer=new byte[4096]; int count,total=0;
             while((count=in.read(buffer))!=-1) { total+=count; if(total>65536) throw new IOException("私钥文件超过 64 KiB"); bytes.write(buffer,0,count); }
-            byte[] key=bytes.toByteArray();
-            if(!new String(key,StandardCharsets.US_ASCII).contains("PRIVATE KEY-----")) throw new IOException("文件不是 PEM/OpenSSH 私钥");
-            try(OutputStream out=openFileOutput("ssh_private_key",MODE_PRIVATE)) { out.write(key); }
-            updateKeyState(); Toast.makeText(this,"私钥已导入",Toast.LENGTH_SHORT).show();
+            key=bytes.toByteArray();
+            savePrivateKey(key);
+            Toast.makeText(this,"SSH 私钥已加密保存",Toast.LENGTH_SHORT).show();
         } catch(Exception e) { alert("导入失败："+e.getMessage()); }
+        finally { if(key!=null) Arrays.fill(key,(byte)0); }
     }
 }
