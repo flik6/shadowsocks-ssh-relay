@@ -293,7 +293,7 @@ public final class MainActivity extends Activity {
         if(statusText==null) return;
         String message=RelayService.status(this); boolean running=RelayService.isRunning(this);
         statusText.setText(message);
-        stateLabel.setText(running?"●  "+(message.contains("已建立")?"转发在线":"正在连接"):"●  已停止");
+        stateLabel.setText(running?"●  "+(message.contains("已建立")?"转发在线":message.contains("转发失败")?"转发失败":"正在连接"):"●  已停止");
         stateLabel.setTextColor(running?(message.contains("已建立")?TEAL:AMBER):MUTED);
         actionButton.setText(running?"停止服务":"启动服务");
         actionButton.setBackground(running?outline(SURFACE,LINE,16):shape(TEAL,16));
